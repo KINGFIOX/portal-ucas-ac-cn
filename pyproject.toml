@@ -1,0 +1,53 @@
+[project]
+name = "portal-ucas-ac-cn"
+version = "0.1.0"
+description = "Headless sign-in for the UCAS (Srun) campus network portal."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "wangfiox" }]
+keywords = ["ucas", "srun", "campus-network", "portal", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet",
+    "Topic :: System :: Networking",
+]
+dependencies = []
+
+[project.scripts]
+portal-ucas-ac-cn = "portal_ucas_ac_cn.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kingfiox/portal-ucas-ac-cn"
+Repository = "https://github.com/kingfiox/portal-ucas-ac-cn"
+Issues = "https://github.com/kingfiox/portal-ucas-ac-cn/issues"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/portal_ucas_ac_cn"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
