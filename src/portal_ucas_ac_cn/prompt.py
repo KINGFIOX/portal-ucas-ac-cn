@@ -2,6 +2,7 @@
 
 A value shown in ``[]`` is the default and is used when Enter is pressed.
 """
+
 from __future__ import annotations
 
 import getpass
@@ -51,4 +52,10 @@ def validate_ip(value: str) -> str | None:
         ipaddress.ip_address(value)
     except ValueError:
         return f"'{value}' is not a valid IP address."
+    return None
+
+
+def validate_ac_id(value: str) -> str | None:
+    if not value.isdigit():
+        return f"'{value}' is not a NAS id; expected a plain number (e.g. 12)."
     return None

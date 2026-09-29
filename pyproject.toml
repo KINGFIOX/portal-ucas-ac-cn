@@ -1,6 +1,6 @@
 [project]
 name = "portal-ucas-ac-cn"
-version = "0.1.0"
+version = "0.2.0"
 description = "Headless sign-in for the UCAS (Srun) campus network portal."
 readme = "README.md"
 requires-python = ">=3.9"

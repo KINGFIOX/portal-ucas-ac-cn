@@ -3,6 +3,7 @@
 The portal wants the login payload encrypted with a modified XXTEA and then
 base64-encoded using a shuffled alphabet.
 """
+
 from __future__ import annotations
 
 import base64
