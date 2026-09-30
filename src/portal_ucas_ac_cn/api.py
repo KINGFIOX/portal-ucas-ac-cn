@@ -12,48 +12,126 @@ correct ``ac_id`` for a device is the one the portal's entry redirect
 session created with any other ``ac_id`` shows up as online in
 ``rad_user_info`` with ``bytes_in == bytes_out == 0`` while the device's
 actual gateway never lets its traffic through.
+
+Transport note: the portal's TLS frontend drops a large share of *fresh*
+handshakes. A ClientHello is frequently answered with an EOF (or just silence)
+after ~5s --- ``SSLEOFError: UNEXPECTED_EOF_WHILE_READING`` / ``Connection
+reset by peer`` --- while a handshake that completes stays healthy for many
+keep-alive requests. Retrying each individual request therefore both wastes
+time (every failure costs ~5s) and occasionally gives up too early. Instead we
+retry only the *connect* until it sticks and then reuse that one socket for
+the handful of calls a login needs.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
+import random
 import ssl
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 from .srun import hmac_md5, sha1_hex, srun_b64, xencode
 
-PORTAL = "https://portal.ucas.ac.cn"
+HOST = "portal.ucas.ac.cn"
+PORTAL = f"https://{HOST}"
 # NAS id observed for some wired subnets; only a fallback prompt default.
 N = "200"
 TYPE = "1"
 UA = "Mozilla/5.0 (X11; Linux x86_64) ucas-srun"
-CTX = ssl._create_unverified_context()
 
-# The portal drops a random fraction of TLS connections; every request needs
-# a few retries.
-_RETRIES = 4
-_RETRY_DELAY = 0.8
+# Fresh-handshake success rate fluctuates around 50%, so a handful of tries
+# drives the chance of total failure below 0.1%. A dropped handshake is
+# answered with an EOF after ~5s, so the connect timeout doubles as a cap on
+# how long a doomed attempt can stall us. Reads get a looser budget: a slow
+# ``srun_portal`` reply must not look like a dropped connection.
+_CONNECT_RETRIES = 12
+_CONNECT_TIMEOUT = 5.0
+_READ_TIMEOUT = 20.0
+
+_CTX = ssl.create_default_context()
+_CTX.check_hostname = False
+_CTX.verify_mode = ssl.CERT_NONE
+
+
+class PortalError(RuntimeError):
+    """The portal could not be reached after exhausting the retries."""
+
+
+def _pause() -> None:
+    # Jitter keeps retries from marching in lockstep with the drop pattern.
+    time.sleep(0.2 + random.random() * 0.5)
+
+
+class _Session:
+    """A keep-alive HTTPS connection to the portal, reconnected on demand."""
+
+    def __init__(self, host: str = HOST) -> None:
+        self._host = host
+        self._conn: http.client.HTTPSConnection | None = None
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except OSError:
+                pass
+            self._conn = None
+
+    def _connect(self) -> http.client.HTTPSConnection:
+        last: Exception | None = None
+        for _ in range(_CONNECT_RETRIES):
+            self.close()
+            conn = http.client.HTTPSConnection(
+                self._host, 443, timeout=_CONNECT_TIMEOUT, context=_CTX
+            )
+            try:
+                conn.connect()
+            except (OSError, http.client.HTTPException) as exc:
+                last = exc
+                _pause()
+                continue
+            if conn.sock is not None:
+                conn.sock.settimeout(_READ_TIMEOUT)
+            self._conn = conn
+            return conn
+        raise PortalError(f"portal unreachable after {_CONNECT_RETRIES} tries: {last!r}")
+
+    def get(self, path: str, params: dict) -> str:
+        query = urllib.parse.urlencode(params)
+        last: Exception | None = None
+        for _ in range(_CONNECT_RETRIES):
+            conn = self._conn or self._connect()
+            try:
+                conn.request("GET", f"{path}?{query}", headers={"User-Agent": UA})
+                response = conn.getresponse()
+                body = response.read()
+            except (OSError, http.client.HTTPException) as exc:
+                # The reused socket went away (idle keep-alive timeout, or the
+                # frontend dropped it). Drop it and build a new one.
+                last = exc
+                self.close()
+                _pause()
+                continue
+            if response.status != 200:
+                last = PortalError(f"HTTP {response.status} from {path}")
+                self.close()
+                _pause()
+                continue
+            if response.will_close:
+                self.close()
+            return body.decode("utf-8", "replace")
+        raise PortalError(f"portal unreachable after {_CONNECT_RETRIES} tries: {last!r}")
+
+
+_SESSION = _Session()
 
 
 def api(path: str, **params) -> dict:
     params.setdefault("callback", "cb")
     params.setdefault("_", int(time.time() * 1000))
-    url = PORTAL + path + "?" + urllib.parse.urlencode(params)
-    last_error: Exception | None = None
-    for _ in range(_RETRIES):
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        try:
-            with urllib.request.urlopen(req, timeout=15, context=CTX) as resp:
-                text = resp.read().decode("utf-8", "replace")
-            break
-        except (urllib.error.URLError, OSError) as exc:
-            last_error = exc
-            time.sleep(_RETRY_DELAY)
-    else:
-        raise RuntimeError(f"portal unreachable after {_RETRIES} tries: {last_error!r}")
+    text = _SESSION.get(path, params)
     if text.startswith("cb(") and text.endswith(")"):
         text = text[3:-1]
     return json.loads(text)
